@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Runta Agent Evaluation</title>
+  <style>
+    body{font-family:system-ui,Arial,sans-serif;max-width:1180px;margin:32px auto;padding:0 18px;background:#fafafa;color:#1f2937}
+    h1{margin-bottom:4px}.muted{color:#6b7280}.card{background:white;border:1px solid #e5e7eb;border-radius:14px;padding:20px;margin:18px 0;box-shadow:0 2px 12px rgba(0,0,0,.03)}
+    label{display:block;font-weight:650;margin:12px 0 6px}input,textarea,select{width:100%;box-sizing:border-box;padding:10px;border:1px solid #cbd5e1;border-radius:8px;background:white}textarea{min-height:120px}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.row input[type=number]{width:100px}
+    button,a.btn{border:0;border-radius:8px;padding:10px 14px;background:#111827;color:white;cursor:pointer;text-decoration:none;display:inline-block}.secondary{background:#e5e7eb!important;color:#111827!important}
+    table{width:100%;border-collapse:collapse}th,td{padding:9px;border-bottom:1px solid #e5e7eb;text-align:left;vertical-align:top}.pill{padding:3px 8px;border-radius:999px;background:#eef2ff;font-size:12px}
+    .candidate{border:1px solid #e5e7eb;border-radius:10px;padding:12px;margin:8px 0}.winner{border-width:2px}.error{color:#b91c1c}.success{color:#047857}pre{white-space:pre-wrap;max-height:220px;overflow:auto;background:#f3f4f6;padding:10px;border-radius:8px}
+    @media(max-width:800px){.grid{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <h1>Agentic Software Engineering Evaluation Platform</h1>
+  <div class="muted">Parallel coding agents execute in isolated Runta runtimes, then deterministic and/or AI evaluation ranks the resulting branches.</div>
+
+  <div class="card">
+    <h2>New engineering task</h2>
+    <div class="grid">
+      <div><label>Name</label><input id="name" value="Fix calculator rounding bug"></div>
+      <div><label>Source</label><select id="source_mode"><option value="fixture">Built-in controlled fixture</option><option value="git">Public Git URL</option></select><div class="muted">Choose “Public Git URL” to reveal the repository URL field.</div></div>
+    </div>
+    <div id="gitWrap" style="display:none"><label>Git URL</label><input id="git_url" placeholder="https://github.com/org/repo.git"><div class="muted">Paste the public HTTPS clone URL here.</div></div>
+    <label>Task</label><textarea id="task">Fix the calculator so percentage discounts are applied before tax and all existing tests pass. Keep the patch minimal and do not change test expectations.</textarea>
+    <div class="grid">
+      <div><label>Parallel candidate runtimes</label><input id="candidate_count" type="number" min="1" max="12" value="3"><div class="muted">This is also our realistic Runta concurrency/load control.</div></div>
+      <div><label>Evaluation mode</label><select id="evaluation_mode"><option value="deterministic">Deterministic</option><option value="ai_judge">AI Judge</option><option value="hybrid" selected>Hybrid</option></select><div class="muted">Hybrid = objective test/patch evidence + AI engineering-quality judge.</div></div>
+    </div>
+    <div class="grid"><div><label>Setup command</label><input id="setup_command" placeholder="pip install -r requirements.txt"></div><div><label>Test command</label><input id="test_command" value="python3 -m unittest -v"></div></div>
+    <label>Extra allowed egress hosts (comma separated)</label><input id="allowed_hosts" placeholder="pypi.org, files.pythonhosted.org, registry.npmjs.org">
+    <div class="row" style="margin-top:14px"><label style="margin:0"><input id="keep_runtimes" type="checkbox" checked style="width:auto"> Keep Runta runtimes after evaluation for manual inspection</label><button id="runBtn">Run evaluation</button></div>
+    <div id="message" class="muted"></div>
+  </div>
+
+  <div class="card"><h2>Runs</h2><div id="runs">Loading…</div></div>
+  <div class="card" id="detailsCard" style="display:none"><h2>Run details</h2><div id="details"></div></div>
+
+<script>
+const $=id=>document.getElementById(id);
+$('source_mode').onchange=()=>{$('gitWrap').style.display=$('source_mode').value==='git'?'block':'none'};
+async function createRun(){
+  const payload={name:$('name').value,task:$('task').value,candidate_count:Number($('candidate_count').value),evaluation_mode:$('evaluation_mode').value,source_mode:$('source_mode').value,git_url:$('source_mode').value==='git'?$('git_url').value||null:null,setup_command:$('setup_command').value,test_command:$('test_command').value,allowed_hosts:$('allowed_hosts').value.split(',').map(x=>x.trim()).filter(Boolean),keep_runtimes:$('keep_runtimes').checked};
+  $('message').textContent='Submitting…';
+  const r=await fetch('/api/runs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); const d=await r.json();
+  $('message').textContent=r.ok?`Queued run ${d.id}`:`Error: ${d.detail||JSON.stringify(d)}`; await refreshRuns();
+}
+$('runBtn').onclick=()=>createRun().catch(e=>$('message').textContent=e);
+async function refreshRuns(){const r=await fetch('/api/runs');const runs=await r.json();$('runs').innerHTML=`<table><thead><tr><th>Name</th><th>Status</th><th>Candidates</th><th>Mode</th><th></th></tr></thead><tbody>${runs.map(x=>`<tr><td>${esc(x.name)}</td><td><span class="pill">${esc(x.status)}</span>${x.error?`<div class="error">${esc(x.error)}</div>`:''}</td><td>${x.candidate_count}</td><td>${x.evaluation_mode}</td><td><button class="secondary" onclick="viewRun('${x.id}')">Open</button></td></tr>`).join('')}</tbody></table>`;}
+async function viewRun(id){const r=await fetch('/api/runs/'+id);const d=await r.json();const run=d.run;const winner=run.winner_candidate_id;let summary={};try{summary=run.summary_json?JSON.parse(run.summary_json):{}}catch(e){}const outcome=summary.outcome||'';const outcomeHtml=outcome==='no_acceptable_candidate'?`<p class="error"><b>No acceptable candidate:</b> no candidate passed deterministic validation, so no winner was selected.</p>`:(winner?`<p class="success"><b>Winner selected:</b> ${esc(winner)}</p>`:'');const downloadHtml=winner?`<div class="row"><a class="btn" href="/api/runs/${id}/download/winner">Download winner</a><a class="btn secondary" href="/api/runs/${id}/download/nonwinners">Download non-winners</a><a class="btn secondary" href="/api/runs/${id}/download/all">Download all</a></div>`:`<div class="row"><a class="btn secondary" href="/api/runs/${id}/download/all">Download all candidates</a></div>`;$('detailsCard').style.display='block';$('details').innerHTML=`<div class="row"><b>${esc(run.name)}</b><span class="pill">${esc(run.status)}</span></div><p>${esc(run.task)}</p>${outcomeHtml}${downloadHtml}<h3>Candidates</h3>${d.candidates.map(c=>`<div class="candidate ${c.id===winner?'winner':''}"><div class="row"><b>Candidate ${c.ordinal}${c.id===winner?' 🥇':''}</b><span class="pill">${esc(c.status)}</span><span>rank ${c.rank??'-'}</span><span>det ${fmt(c.deterministic_score)}</span><span>AI ${fmt(c.ai_score)}</span><span>final ${fmt(c.final_score)}</span></div><div>Runtime: <code>${esc(c.runtime_name||'-')}</code> / <code>${esc(c.runtime_id||'-')}</code></div><div>Tests exit: ${c.test_exit_code??'-'}</div><div class="row"><a class="btn secondary" href="/api/runs/${id}/download/${c.id}">Download this candidate</a><button class="secondary" onclick="toggle('diff-${c.ordinal}')">View diff</button><button class="secondary" onclick="toggle('test-${c.ordinal}')">View tests</button></div><pre id="diff-${c.ordinal}" style="display:none">${esc(c.diff_text||'')}</pre><pre id="test-${c.ordinal}" style="display:none">${esc(c.test_output||'')}</pre>${c.error?`<div class="error">${esc(c.error)}</div>`:''}</div>`).join('')}`;}
+function toggle(id){const e=$(id);e.style.display=e.style.display==='none'?'block':'none'}function fmt(x){return x===null||x===undefined?'-':Number(x).toFixed(1)}function esc(s){return String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]))}
+refreshRuns();setInterval(refreshRuns,5000);
+</script>
+</body></html>
